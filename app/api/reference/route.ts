@@ -140,29 +140,76 @@ function extractLinks(html: string, baseUrl: string) {
   return links;
 }
 function findNanaExpectationLink(html: string, baseUrl: string) {
-  // 「攻略情報」見出し直後のメニュー内にある、1件目のliリンクを最優先で取得する。
-  const headingRe = /<p\b[^>]*id=["']攻略情報["'][^>]*>[\s\S]*?<\/p>/i;
-  const heading = headingRe.exec(html);
-  let scope = html;
+  // なな徹は「攻略情報」とリンク一覧の間にラッパー要素が入るページがある。
+  // そのため隣接するulを前提にせず、「攻略情報」の位置から次のカテゴリ見出しまでを走査する。
+  const articlePathPattern = /\/kaiseki\/machine\/\d+\/\d+\/?(?:[?#][^"']*)?$/i;
 
-  if (heading && heading.index !== undefined) {
-    const start = heading.index + heading[0].length;
-    const nextMainHeading = /<p\b[^>]*class=["'][^"']*el_mainHead[^"']*["'][^>]*>/ig;
-    nextMainHeading.lastIndex = start;
-    const next = nextMainHeading.exec(html);
-    scope = html.slice(start, next?.index ?? html.length);
+  const resolveFirstArticleLink = (scope: string) => {
+    // 最初のli内にある記事リンクを優先する。
+    const liRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+    let liMatch: RegExpExecArray | null;
+    while ((liMatch = liRe.exec(scope))) {
+      const href = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/i.exec(liMatch[1])?.[1];
+      if (!href) continue;
+      const url = absoluteUrl(href, baseUrl).split("#")[0];
+      if (articlePathPattern.test(url)) return url;
+    }
 
-    const firstListItem = /<li\b[^>]*>[\s\S]*?<a\b[^>]*href=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>[\s\S]*?<\/li>/i.exec(scope);
-    if (firstListItem?.[1]) return absoluteUrl(firstListItem[1], baseUrl).split("#")[0];
+    // liの構造が通常と異なる場合は、範囲内の最初の記事リンクを使う。
+    const anchorRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
+    let anchorMatch: RegExpExecArray | null;
+    while ((anchorMatch = anchorRe.exec(scope))) {
+      const url = absoluteUrl(anchorMatch[1], baseUrl).split("#")[0];
+      if (articlePathPattern.test(url)) return url;
+    }
+    return null;
+  };
+
+  // id属性の前後や属性順に依存せず、攻略情報を持つ開始タグを探す。
+  const headingTagRe = /<([a-z][\w:-]*)\b[^>]*\bid=["']攻略情報["'][^>]*>/i;
+  const headingTag = headingTagRe.exec(html);
+  if (headingTag?.index !== undefined) {
+    const start = headingTag.index + headingTag[0].length;
+
+    // 次のメインカテゴリまでを攻略情報の範囲とする。
+    const nextHeadingRe = /<(?:p|h[1-6]|div)\b[^>]*class=["'][^"']*el_mainHead[^"']*["'][^>]*>/gi;
+    nextHeadingRe.lastIndex = start;
+    const nextHeading = nextHeadingRe.exec(html);
+    const scope = html.slice(start, nextHeading?.index ?? html.length);
+    const first = resolveFirstArticleLink(scope);
+    if (first) return first;
   }
 
-  // HTML構造が変わった場合だけ、従来のキーワード判定へフォールバックする。
-  const links = extractLinks(scope, baseUrl);
-  const fallback = links.find((link) => {
-    const label = normalize(link.label);
-    return label.includes("天井") && label.includes("期待値") && label.includes("恩恵");
-  });
-  return fallback?.href.split("#")[0] ?? null;
+  // idが見つからないページ向け。表示文字「攻略情報」から次カテゴリ文字までを対象にする。
+  const textHeadingRe = />\s*攻略情報\s*</g;
+  const textHeading = textHeadingRe.exec(html);
+  if (textHeading?.index !== undefined) {
+    const start = textHeading.index + textHeading[0].length;
+    const rest = html.slice(start);
+    const nextCategory = rest.search(/>\s*(?:通常時情報|ボーナス情報|AT情報|CZ情報|設定判別)\s*</);
+    const scope = rest.slice(0, nextCategory >= 0 ? nextCategory : undefined);
+    const first = resolveFirstArticleLink(scope);
+    if (first) return first;
+  }
+
+  // 最終フォールバック：機種ページ内の記事リンクをキーワードで採点する。
+  const links = extractLinks(html, baseUrl)
+    .filter((link) => articlePathPattern.test(link.href.split("#")[0]))
+    .map((link) => {
+      const label = normalize(link.label);
+      let points = 0;
+      if (label.includes("天井")) points += 4;
+      if (label.includes("期待値")) points += 4;
+      if (label.includes("恩恵")) points += 2;
+      if (label.includes("発動条件") || label.includes("発動ゲーム数")) points += 2;
+      if (label.includes("狙い目")) points += 1;
+      if (label.includes("ヤメ時") || label.includes("やめ時")) points += 1;
+      return { ...link, points };
+    })
+    .filter((link) => link.points >= 8)
+    .sort((a, b) => b.points - a.points);
+
+  return links[0]?.href.split("#")[0] ?? null;
 }
 function extractTablesWithContext(html: string) {
   const tables: Array<{ html: string; context: string }> = []; const re = /<table\b[^>]*>[\s\S]*?<\/table>/gi; let match: RegExpExecArray | null;
