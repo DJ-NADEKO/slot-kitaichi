@@ -159,3 +159,35 @@ button { -webkit-tap-highlight-color: transparent; }
   .summary-list > div { align-items: flex-start; }
   .login-card { padding: 27px 20px; }
 }
+
+
+/* v1.1: 元記事の抽出表示を主役に戻し、なな徹を追加 */
+.results-stack { display: grid; gap: 16px; }
+.result-section { overflow: hidden; border-radius: 22px; background: rgba(255,255,255,.93); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.result-section.source-dmm { border-top: 5px solid #ec6a97; }
+.result-section.source-haiena { border-top: 5px solid #7d6dcc; }
+.result-section.source-nana { border-top: 5px solid #3d9b8f; }
+.result-section-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.result-section-header h3 { margin: 7px 0 0; font-size: 16px; line-height: 1.45; }
+.result-section-header a { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; text-decoration: none; font-size: 12px; font-weight: 900; color: var(--pink-deep); background: #fff5f8; border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px; }
+.source-nana .source-pill { background: #e6f7f3; color: #24796e; }
+.source-nana .result-section-header a { color: #24796e; background: #effaf7; }
+.result-section-body { padding: 17px 18px 20px; }
+.result-section-body > h4 { margin: 0 0 12px; font-size: 16px; }
+.result-section .original-format { max-height: none; overflow: visible; padding-right: 0; }
+.source-nana .original-format th { background: #e6f7f3; }
+.expectation-summary { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 0 0 15px; padding: 14px 16px; border-radius: 17px; border: 1px solid; }
+.expectation-summary div { display: grid; gap: 3px; }
+.expectation-summary span { font-size: 11px; font-weight: 900; opacity: .72; }
+.expectation-summary strong { font-size: 19px; }
+.expectation-summary small { line-height: 1.5; }
+.expectation-summary.positive { background: var(--mint); border-color: #b7e3d8; color: #236f5c; }
+.expectation-summary.negative { background: #fff1f3; border-color: #efc9d2; color: #94364b; }
+@media (max-width: 760px) {
+  .result-section-header { align-items: flex-start; }
+  .result-section-header a { padding: 7px 9px; }
+  .result-section-body { padding: 15px 13px 18px; }
+  .expectation-summary { align-items: flex-start; flex-direction: column; }
+  .original-format { font-size: 12px; }
+  .original-format table { display: block; overflow-x: auto; white-space: nowrap; }
+}
