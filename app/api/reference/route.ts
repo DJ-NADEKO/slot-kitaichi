@@ -5,7 +5,8 @@ export const dynamic = "force-dynamic";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
 type Source = "DMMぱちタウン" | "ハイエナくん";
 type SearchItem = { source: Source; title: string; url: string };
-type Result = SearchItem & { heading: string; lines?: string[]; contentHtml?: string };
+type QuickFact = { label: string; value: string; games?: number };
+type Result = SearchItem & { heading: string; lines?: string[]; contentHtml?: string; quickFacts?: QuickFact[] };
 
 function decodeHtml(value: string) {
   return value
@@ -163,6 +164,40 @@ function extractElementSectionById(html: string, id: string, tagName = "h2") {
   };
 }
 
+
+function extractQuickFacts(value: string): QuickFact[] {
+  const plain = text(value).replace(/\s+/g, " ").trim();
+  if (!plain) return [];
+
+  const facts: QuickFact[] = [];
+  const patterns: Array<{ label: string; re: RegExp }> = [
+    { label: "狙い目", re: /(?:狙い目|天井狙い|打ち出し|狙い時)[^。\n]{0,45}?(\d{2,4})\s*G(?:以降|以上|～|~|から)?/gi },
+    { label: "ゾーン", re: /(?:ゾーン|周期狙い)[^。\n]{0,45}?(\d{2,4})\s*G(?:以降|以上|～|~|から)?/gi },
+    { label: "天井", re: /(?:天井|最大)[^。\n]{0,35}?(\d{2,4})\s*G/gi },
+    { label: "リセット", re: /(?:リセット|朝一)[^。\n]{0,45}?(\d{2,4})\s*G(?:以降|以上|～|~|から)?/gi },
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.re.exec(plain))) {
+      const games = Number(match[1]);
+      if (!Number.isFinite(games)) continue;
+      const start = Math.max(0, match.index - 8);
+      const end = Math.min(plain.length, match.index + match[0].length + 20);
+      const valueText = plain.slice(start, end).replace(/^.*?[。！？]/, "").trim();
+      if (!facts.some((fact) => fact.label === pattern.label && fact.games === games)) {
+        facts.push({ label: pattern.label, value: valueText.length <= 70 ? valueText : `${games}G～`, games });
+      }
+      if (facts.length >= 6) break;
+    }
+  }
+
+  const stopMatch = plain.match(/(?:ヤメ時|やめ時|止め時)[：:\s]*([^。]{2,70})/i);
+  if (stopMatch) facts.push({ label: "ヤメ時", value: stopMatch[1].trim() });
+
+  return facts.slice(0, 6);
+}
+
 function sanitizeDmmZoneHtml(value: string) {
   return sanitizeSummaryHtml(value)
     // 「狙い目・ゾーン狙いまとめはコチラ！」など、別ページへ遷移する画像バナーを除外する。
@@ -182,7 +217,8 @@ async function getDmm(item: SearchItem): Promise<Result> {
     ...item,
     url: `${detailUrl}#anc-zone`,
     heading: block?.heading || "天井・ゾーン・ヤメ時",
-    contentHtml: block ? sanitizeDmmZoneHtml(block.body) : ""
+    contentHtml: block ? sanitizeDmmZoneHtml(block.body) : "",
+    quickFacts: block ? extractQuickFacts(block.body) : []
   };
 }
 
@@ -196,7 +232,8 @@ async function getHaienakun(item: SearchItem): Promise<Result> {
   return {
     ...item,
     heading: block?.heading || "まとめ",
-    contentHtml: block ? sanitizeSummaryHtml(block.body) : ""
+    contentHtml: block ? sanitizeSummaryHtml(block.body) : "",
+    quickFacts: block ? extractQuickFacts(block.body) : []
   };
 }
 
