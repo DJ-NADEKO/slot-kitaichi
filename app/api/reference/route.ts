@@ -47,8 +47,11 @@ async function findDmmCandidates(query: string): Promise<SearchItem[]> {
   const re = /<a[^>]+href=["'](\/machines\/\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(html))) {
-    const title = oneLine(match[2]);
-    if (!title || score(title, query) <= 0) continue;
+    const cardHtml = match[2];
+    // DMM検索結果ではパチンコに text-icon _pinball が付くため除外する。
+    if (/class=["'][^"']*text-icon[^"']*(?:_pinball|-pinball|\bpinball\b)[^"']*["']/i.test(cardHtml)) continue;
+    const title = oneLine(cardHtml);
+    if (!title || /パチンコ/.test(title) || score(title, query) <= 0) continue;
     candidates.push({ source: "DMMぱちタウン", title, url: `https://p-town.dmm.com${match[1].split("?")[0].split("#")[0]}` });
   }
   return uniqueItems(candidates).sort((a, b) => score(b.title, query) - score(a.title, query)).slice(0, 8);
@@ -137,11 +140,36 @@ function extractLinks(html: string, baseUrl: string) {
   return links;
 }
 function findNanaExpectationLink(html: string, baseUrl: string) {
-  const links = extractLinks(html, baseUrl).filter((link) => {
+  // 「攻略情報」見出し直後のメニューだけを対象にする。
+  const headingRe = /<p\b[^>]*id=["']攻略情報["'][^>]*>[\s\S]*?<\/p>/i;
+  const heading = headingRe.exec(html);
+  let scope = html;
+  if (heading && heading.index !== undefined) {
+    const start = heading.index + heading[0].length;
+    const nextMainHeading = /<p\b[^>]*class=["'][^"']*el_mainHead[^"']*["'][^>]*>/ig;
+    nextMainHeading.lastIndex = start;
+    const next = nextMainHeading.exec(html);
+    scope = html.slice(start, next?.index ?? html.length);
+  }
+
+  const links = extractLinks(scope, baseUrl);
+  const exact = links.find((link) => {
     const label = normalize(link.label);
-    return label.includes("天井") && label.includes("期待値") && label.includes("発動ゲーム数") && label.includes("恩恵");
+    return label.includes("天井")
+      && label.includes("期待値")
+      && label.includes("恩恵")
+      && label.includes("狙い目")
+      && label.includes("ヤメ時")
+      && label.includes("まとめ");
   });
-  return links[0]?.href.split("#")[0] ?? null;
+  if (exact) return exact.href.split("#")[0];
+
+  // 表記揺れに備えたフォールバック。
+  const fallback = links.find((link) => {
+    const label = normalize(link.label);
+    return label.includes("天井") && label.includes("期待値") && label.includes("恩恵");
+  });
+  return fallback?.href.split("#")[0] ?? null;
 }
 function extractTablesWithContext(html: string) {
   const tables: Array<{ html: string; context: string }> = []; const re = /<table\b[^>]*>[\s\S]*?<\/table>/gi; let match: RegExpExecArray | null;
@@ -214,7 +242,7 @@ async function getNana(item: SearchItem): Promise<Result> {
   const machineHtml = await fetchHtml(item.url);
   const machineTitle = extractNanaMachineTitle(machineHtml, item.title);
   const expectationUrl = findNanaExpectationLink(machineHtml, item.url);
-  if (!expectationUrl) throw new Error("なな徹：『天井の期待値や発動ゲーム数・恩恵』へのリンクを特定できませんでした。");
+  if (!expectationUrl) throw new Error("なな徹：攻略情報メニューの『天井の期待値や恩恵・狙い目とヤメ時まとめ』リンクを特定できませんでした。");
   const detailHtml = await fetchHtml(expectationUrl); const expectation = extractNanaExpectation(detailHtml);
   if (!expectation) throw new Error("なな徹：非等価の期待値金額表を抽出できませんでした。");
   return { source: "なな徹", title: machineTitle || cleanMachineName(item.title), url: expectationUrl, heading: expectation.heading, contentHtml: expectation.contentHtml, expectationRows: expectation.rows };
