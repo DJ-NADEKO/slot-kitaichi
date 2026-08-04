@@ -96,11 +96,6 @@ function cleanMachineName(title: string) {
     .replace(/(?:天井|狙い目|期待値|やめ時|ヤメ時|有利区間)[\s\S]*$/g, "")
     .replace(/\s*[|｜].*$/g, "").trim();
 }
-function buildCandidateNames(groups: SearchItem[][], query: string) {
-  const raw = groups.flat().map((item) => cleanMachineName(item.title)).filter((name) => name && score(name, query) > 0);
-  const names = raw.filter((name, index, all) => all.findIndex((x) => normalize(x) === normalize(name)) === index);
-  return names.sort((a, b) => score(b, query) - score(a, query)).slice(0, 10);
-}
 
 function extractHeadingBlock(html: string, headingPattern: RegExp) {
   const headingRe = /<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi;
@@ -179,6 +174,31 @@ function extractNanaExpectation(html: string) {
   return { heading: "非等価の期待値金額表", contentHtml: sanitizeHtml(table.html), rows };
 }
 
+function extractMetaContent(html: string, property: string) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const first = new RegExp(`<meta\\b[^>]*(?:property|name)=["']${escaped}["'][^>]*content=["']([^"']+)["'][^>]*>`, "i").exec(html)?.[1];
+  const second = new RegExp(`<meta\\b[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["']${escaped}["'][^>]*>`, "i").exec(html)?.[1];
+  return oneLine(first || second || "");
+}
+function extractNanaMachineTitle(html: string, fallback: string) {
+  const candidates = [
+    html.match(/<h1\b[^>]*class=["'][^"']*(?:model|machine|title)[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1],
+    html.match(/<(?:p|div|span)\b[^>]*class=["'][^"']*(?:bl_modelName|modelName|machineName)[^"']*["'][^>]*>([\s\S]*?)<\/(?:p|div|span)>/i)?.[1],
+    html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1],
+    extractMetaContent(html, "og:title"),
+    html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1],
+    fallback,
+  ];
+  for (const value of candidates) {
+    const cleaned = cleanMachineName(oneLine(value || "")
+      .replace(/｜.*なな徹.*$/i, "")
+      .replace(/- なな徹.*$/i, "")
+      .replace(/パチスロ・スロット.*$/i, ""));
+    if (cleaned && !/機種解析|解析情報|検索結果|なな徹/.test(cleaned)) return cleaned;
+  }
+  return cleanMachineName(fallback);
+}
+
 async function getDmm(item: SearchItem): Promise<Result> {
   const detailUrl = item.url.replace(/\/$/, ""); const html = await fetchHtml(detailUrl); const block = extractElementSectionById(html, "anc-zone", "h2");
   const pageTitle = oneLine(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
@@ -192,12 +212,12 @@ async function getHaienakun(item: SearchItem): Promise<Result> {
 }
 async function getNana(item: SearchItem): Promise<Result> {
   const machineHtml = await fetchHtml(item.url);
-  const machineTitle = oneLine(machineHtml.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || machineHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
+  const machineTitle = extractNanaMachineTitle(machineHtml, item.title);
   const expectationUrl = findNanaExpectationLink(machineHtml, item.url);
   if (!expectationUrl) throw new Error("なな徹：『天井の期待値や発動ゲーム数・恩恵』へのリンクを特定できませんでした。");
   const detailHtml = await fetchHtml(expectationUrl); const expectation = extractNanaExpectation(detailHtml);
   if (!expectation) throw new Error("なな徹：非等価の期待値金額表を抽出できませんでした。");
-  return { source: "なな徹", title: cleanMachineName(machineTitle) || cleanMachineName(item.title), url: expectationUrl, heading: expectation.heading, contentHtml: expectation.contentHtml, expectationRows: expectation.rows };
+  return { source: "なな徹", title: machineTitle || cleanMachineName(item.title), url: expectationUrl, heading: expectation.heading, contentHtml: expectation.contentHtml, expectationRows: expectation.rows };
 }
 
 function chooseBest(items: SearchItem[], selected: string) {
@@ -206,30 +226,33 @@ function chooseBest(items: SearchItem[], selected: string) {
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim() ?? "";
-  const selected = request.nextUrl.searchParams.get("selected")?.trim() ?? "";
   if (query.length < 2) return NextResponse.json({ message: "機種名を2文字以上入力してください。" }, { status: 400 });
 
-  const searched = await Promise.allSettled([findDmmCandidates(selected || query), findHaienakunCandidates(selected || query), findNanaCandidates(selected || query)]);
+  const searched = await Promise.allSettled([
+    findDmmCandidates(query),
+    findHaienakunCandidates(query),
+    findNanaCandidates(query),
+  ]);
   const dmmCandidates = searched[0].status === "fulfilled" ? searched[0].value : [];
   const haienaCandidates = searched[1].status === "fulfilled" ? searched[1].value : [];
   const nanaCandidates = searched[2].status === "fulfilled" ? searched[2].value : [];
 
-  if (!selected) {
-    const candidateNames = buildCandidateNames([dmmCandidates, haienaCandidates, nanaCandidates], query);
-    if (candidateNames.length > 1) return NextResponse.json({ query, candidates: candidateNames, results: [], errors: [], fetchedAt: new Date().toISOString() });
-    if (candidateNames.length === 1) {
-      const url = new URL(request.url); url.searchParams.set("selected", candidateNames[0]);
-      return GET(new NextRequest(url));
-    }
-  }
+  const errors: string[] = [];
+  const tasks: Promise<Result>[] = [];
+  const dmm = chooseBest(dmmCandidates, query);
+  const haiena = chooseBest(haienaCandidates, query);
+  const nana = chooseBest(nanaCandidates, query);
 
-  const machineName = selected || query; const errors: string[] = []; const tasks: Promise<Result>[] = [];
-  const dmm = chooseBest(dmmCandidates, machineName); const haiena = chooseBest(haienaCandidates, machineName); const nana = chooseBest(nanaCandidates, machineName);
   if (dmm) tasks.push(getDmm(dmm)); else errors.push("DMMぱちタウン：該当機種を特定できませんでした。");
   if (haiena) tasks.push(getHaienakun(haiena)); else errors.push("ハイエナくん：対象となる通常記事を特定できませんでした。");
   if (nana) tasks.push(getNana(nana)); else errors.push("なな徹：該当機種を特定できませんでした。");
 
-  const settled = await Promise.allSettled(tasks); const results: Result[] = [];
-  for (const result of settled) result.status === "fulfilled" ? results.push(result.value) : errors.push(result.reason instanceof Error ? result.reason.message : "記事取得に失敗しました。");
-  return NextResponse.json({ query, selectedMachine: machineName, candidates: [], results, errors, fetchedAt: new Date().toISOString() });
+  const settled = await Promise.allSettled(tasks);
+  const results: Result[] = [];
+  for (const result of settled) {
+    if (result.status === "fulfilled") results.push(result.value);
+    else errors.push(result.reason instanceof Error ? result.reason.message : "記事取得に失敗しました。");
+  }
+
+  return NextResponse.json({ query, results, errors, fetchedAt: new Date().toISOString() });
 }
