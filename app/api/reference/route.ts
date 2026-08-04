@@ -140,31 +140,24 @@ function extractLinks(html: string, baseUrl: string) {
   return links;
 }
 function findNanaExpectationLink(html: string, baseUrl: string) {
-  // 「攻略情報」見出し直後のメニューだけを対象にする。
+  // 「攻略情報」見出し直後のメニュー内にある、1件目のliリンクを最優先で取得する。
   const headingRe = /<p\b[^>]*id=["']攻略情報["'][^>]*>[\s\S]*?<\/p>/i;
   const heading = headingRe.exec(html);
   let scope = html;
+
   if (heading && heading.index !== undefined) {
     const start = heading.index + heading[0].length;
     const nextMainHeading = /<p\b[^>]*class=["'][^"']*el_mainHead[^"']*["'][^>]*>/ig;
     nextMainHeading.lastIndex = start;
     const next = nextMainHeading.exec(html);
     scope = html.slice(start, next?.index ?? html.length);
+
+    const firstListItem = /<li\b[^>]*>[\s\S]*?<a\b[^>]*href=["']([^"']+)["'][^>]*>[\s\S]*?<\/a>[\s\S]*?<\/li>/i.exec(scope);
+    if (firstListItem?.[1]) return absoluteUrl(firstListItem[1], baseUrl).split("#")[0];
   }
 
+  // HTML構造が変わった場合だけ、従来のキーワード判定へフォールバックする。
   const links = extractLinks(scope, baseUrl);
-  const exact = links.find((link) => {
-    const label = normalize(link.label);
-    return label.includes("天井")
-      && label.includes("期待値")
-      && label.includes("恩恵")
-      && label.includes("狙い目")
-      && label.includes("ヤメ時")
-      && label.includes("まとめ");
-  });
-  if (exact) return exact.href.split("#")[0];
-
-  // 表記揺れに備えたフォールバック。
   const fallback = links.find((link) => {
     const label = normalize(link.label);
     return label.includes("天井") && label.includes("期待値") && label.includes("恩恵");
@@ -242,7 +235,7 @@ async function getNana(item: SearchItem): Promise<Result> {
   const machineHtml = await fetchHtml(item.url);
   const machineTitle = extractNanaMachineTitle(machineHtml, item.title);
   const expectationUrl = findNanaExpectationLink(machineHtml, item.url);
-  if (!expectationUrl) throw new Error("なな徹：攻略情報メニューの『天井の期待値や恩恵・狙い目とヤメ時まとめ』リンクを特定できませんでした。");
+  if (!expectationUrl) throw new Error("なな徹：攻略情報メニューの1件目のリンクを特定できませんでした。");
   const detailHtml = await fetchHtml(expectationUrl); const expectation = extractNanaExpectation(detailHtml);
   if (!expectation) throw new Error("なな徹：非等価の期待値金額表を抽出できませんでした。");
   return { source: "なな徹", title: machineTitle || cleanMachineName(item.title), url: expectationUrl, heading: expectation.heading, contentHtml: expectation.contentHtml, expectationRows: expectation.rows };
