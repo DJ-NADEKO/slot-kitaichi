@@ -6,63 +6,42 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/
 type Source = "DMMぱちタウン" | "ハイエナくん" | "なな徹";
 type SearchItem = { source: Source; title: string; url: string };
 type ExpectationRow = { games: number; equivalent?: string; nonEquivalent: string; label?: string };
-type Result = SearchItem & {
-  heading: string;
-  lines?: string[];
-  contentHtml?: string;
-  expectationRows?: ExpectationRow[];
-};
+type Result = SearchItem & { heading: string; lines?: string[]; contentHtml?: string; expectationRows?: ExpectationRow[] };
 
 function decodeHtml(value: string) {
-  return value
-    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'")
+  return value.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
     .replace(/&#x([0-9a-f]+);/gi, (_, x) => String.fromCodePoint(parseInt(x, 16)))
     .replace(/&#(\d+);/g, (_, x) => String.fromCodePoint(Number(x)));
 }
-
 function text(value: string) {
-  return decodeHtml(value
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<br\s*\/?\s*>/gi, "\n")
+  return decodeHtml(value.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ").replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<\/(p|div|li|tr|h1|h2|h3|h4|h5|dt|dd|section|article)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/[\t ]+/g, " ")
-    .replace(/\n\s*\n+/g, "\n")
-    .trim());
+    .replace(/<[^>]+>/g, " ").replace(/[\t ]+/g, " ").replace(/\n\s*\n+/g, "\n").trim());
 }
-
 function oneLine(value: string) { return text(value).replace(/\s+/g, " ").trim(); }
-function normalize(value: string) { return value.toLowerCase().replace(/[\s　・･\-‐－_\[\]【】「」『』（）()]/g, ""); }
-function absoluteUrl(href: string, base: string) {
-  try { return new URL(href, base).toString(); } catch { return href; }
-}
-
+function normalize(value: string) { return value.toLowerCase().replace(/[\s　・･\-‐－_\[\]【】「」『』（）()／/]/g, ""); }
+function absoluteUrl(href: string, base: string) { try { return new URL(href, base).toString(); } catch { return href; } }
 async function fetchHtml(url: string, accept = "text/html") {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(url, {
-      headers: { "user-agent": UA, accept },
-      cache: "no-store",
-      redirect: "follow",
-      signal: controller.signal,
-    });
+    const response = await fetch(url, { headers: { "user-agent": UA, accept }, cache: "no-store", redirect: "follow", signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.text();
   } finally { clearTimeout(timer); }
 }
-
 function score(title: string, query: string) {
   const t = normalize(title); const q = normalize(query);
   if (t === q) return 100;
-  if (t.includes(q)) return 80;
+  if (t.includes(q)) return 80 - Math.min(20, Math.max(0, t.length - q.length));
   return query.split(/[\s　]+/).filter(Boolean).reduce((n, w) => n + (t.includes(normalize(w)) ? 10 : 0), 0);
 }
+function uniqueItems(items: SearchItem[]) {
+  return items.filter((item, index, all) => all.findIndex((x) => x.url === item.url) === index);
+}
 
-async function findDmm(query: string): Promise<SearchItem | null> {
+async function findDmmCandidates(query: string): Promise<SearchItem[]> {
   const html = await fetchHtml(`https://p-town.dmm.com/machines/search?keyword=${encodeURIComponent(query)}`);
   const candidates: SearchItem[] = [];
   const re = /<a[^>]+href=["'](\/machines\/\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
@@ -70,13 +49,12 @@ async function findDmm(query: string): Promise<SearchItem | null> {
   while ((match = re.exec(html))) {
     const title = oneLine(match[2]);
     if (!title || score(title, query) <= 0) continue;
-    const url = `https://p-town.dmm.com${match[1].split("?")[0].split("#")[0]}`;
-    if (!candidates.some((x) => x.url === url)) candidates.push({ source: "DMMぱちタウン", title, url });
+    candidates.push({ source: "DMMぱちタウン", title, url: `https://p-town.dmm.com${match[1].split("?")[0].split("#")[0]}` });
   }
-  return candidates.sort((a, b) => score(b.title, query) - score(a.title, query))[0] ?? null;
+  return uniqueItems(candidates).sort((a, b) => score(b.title, query) - score(a.title, query)).slice(0, 8);
 }
 
-async function findHaienakun(query: string): Promise<SearchItem | null> {
+async function findHaienakunCandidates(query: string): Promise<SearchItem[]> {
   let candidates: SearchItem[] = [];
   try {
     const raw = await fetchHtml(`https://haienakun.com/wp-json/wp/v2/search?search=${encodeURIComponent(query)}&per_page=20&type=post`, "application/json");
@@ -86,259 +64,172 @@ async function findHaienakun(query: string): Promise<SearchItem | null> {
     const html = await fetchHtml(`https://haienakun.com/?s=${encodeURIComponent(query)}`);
     const re = /<a[^>]+href=["'](https:\/\/haienakun\.com\/[^"'#?]+\/?)['"][^>]*>([\s\S]*?)<\/a>/gi;
     let match: RegExpExecArray | null;
-    while ((match = re.exec(html))) {
-      const title = oneLine(match[2]);
-      if (title) candidates.push({ source: "ハイエナくん", title, url: match[1] });
-    }
+    while ((match = re.exec(html))) { const title = oneLine(match[2]); if (title) candidates.push({ source: "ハイエナくん", title, url: match[1] }); }
   }
-  candidates = candidates.filter((item) => {
+  return uniqueItems(candidates.filter((item) => {
     const n = normalize(item.title);
-    return score(item.title, query) > 0
-      && !/ブログ会員限定記事|会員限定|有料記事/.test(item.title)
-      && !/_membership\/?$/i.test(item.url)
-      && (/ハイエナ狙い目/.test(item.title) || /狙い目|天井|やめ時|スロット/.test(n));
-  });
-  return candidates.sort((a, b) => {
-    const preferredA = /ハイエナ狙い目/.test(a.title) ? 30 : 0;
-    const preferredB = /ハイエナ狙い目/.test(b.title) ? 30 : 0;
-    return (score(b.title, query) + preferredB) - (score(a.title, query) + preferredA);
-  })[0] ?? null;
+    return score(item.title, query) > 0 && !/ブログ会員限定記事|会員限定|有料記事/.test(item.title)
+      && !/_membership\/?$/i.test(item.url) && (/ハイエナ狙い目/.test(item.title) || /狙い目|天井|やめ時|スロット/.test(n));
+  })).sort((a, b) => {
+    const pa = /ハイエナ狙い目/.test(a.title) ? 30 : 0; const pb = /ハイエナ狙い目/.test(b.title) ? 30 : 0;
+    return score(b.title, query) + pb - (score(a.title, query) + pa);
+  }).slice(0, 8);
 }
 
-async function findNana(query: string): Promise<SearchItem | null> {
+async function findNanaCandidates(query: string): Promise<SearchItem[]> {
   const searchUrl = `https://nana-press.com/kaiseki/search/?c=s&keyword=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(searchUrl);
-  const candidates: SearchItem[] = [];
+  const html = await fetchHtml(searchUrl); const candidates: SearchItem[] = [];
   const re = /<a\b[^>]*href=["']([^"']*\/kaiseki\/machine\/\d+\/?(?:[?#][^"']*)?)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(html))) {
-    const title = oneLine(match[2]);
-    if (!title || score(title, query) <= 0) continue;
-    const url = absoluteUrl(match[1], searchUrl).split("?")[0].split("#")[0];
-    if (!candidates.some((item) => item.url === url)) candidates.push({ source: "なな徹", title, url });
+    const title = oneLine(match[2]); if (!title || score(title, query) <= 0) continue;
+    candidates.push({ source: "なな徹", title, url: absoluteUrl(match[1], searchUrl).split("?")[0].split("#")[0] });
   }
-  return candidates.sort((a, b) => score(b.title, query) - score(a.title, query))[0] ?? null;
+  return uniqueItems(candidates).sort((a, b) => score(b.title, query) - score(a.title, query)).slice(0, 8);
 }
 
-function extractHeadingBlock(html: string, headingPattern: RegExp, stopAtSameOrHigher = true) {
+function cleanMachineName(title: string) {
+  return oneLine(title)
+    .replace(/^【[^】]+】\s*/g, "")
+    .replace(/【スロット[\s\S]*$/g, "")
+    .replace(/【[^】]*(?:天井|狙い目|期待値|やめ時|ヤメ時)[^】]*】/g, "")
+    .replace(/(?:天井|狙い目|期待値|やめ時|ヤメ時|有利区間)[\s\S]*$/g, "")
+    .replace(/\s*[|｜].*$/g, "").trim();
+}
+function buildCandidateNames(groups: SearchItem[][], query: string) {
+  const raw = groups.flat().map((item) => cleanMachineName(item.title)).filter((name) => name && score(name, query) > 0);
+  const names = raw.filter((name, index, all) => all.findIndex((x) => normalize(x) === normalize(name)) === index);
+  return names.sort((a, b) => score(b, query) - score(a, query)).slice(0, 10);
+}
+
+function extractHeadingBlock(html: string, headingPattern: RegExp) {
   const headingRe = /<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi;
   const headings: Array<{ level: number; heading: string; start: number; end: number }> = [];
   let match: RegExpExecArray | null;
-  while ((match = headingRe.exec(html))) {
-    headings.push({ level: Number(match[1].slice(1)), heading: oneLine(match[2]), start: match.index, end: headingRe.lastIndex });
-  }
-  const targetIndex = headings.findIndex((h) => headingPattern.test(h.heading));
-  if (targetIndex < 0) return null;
-  const target = headings[targetIndex];
-  const next = headings.slice(targetIndex + 1).find((h) => !stopAtSameOrHigher || h.level <= target.level);
+  while ((match = headingRe.exec(html))) headings.push({ level: Number(match[1].slice(1)), heading: oneLine(match[2]), start: match.index, end: headingRe.lastIndex });
+  const targetIndex = headings.findIndex((h) => headingPattern.test(h.heading)); if (targetIndex < 0) return null;
+  const target = headings[targetIndex]; const next = headings.slice(targetIndex + 1).find((h) => h.level <= target.level);
   return { heading: target.heading, body: html.slice(target.end, next?.start ?? html.length) };
 }
-
 function sanitizeHtml(value: string) {
-  return value
-    .replace(/<!--[\s\S]*?-->/g, "")
+  return value.replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<(script|style|iframe|object|embed|form|input|button|textarea|select|link|meta)[^>]*>[\s\S]*?<\/\1>/gi, "")
     .replace(/<(script|style|iframe|object|embed|form|input|button|textarea|select|link|meta)[^>]*\/?\s*>/gi, "")
-    .replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "")
-    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, "")
-    .replace(/\s(?:style|class|id|data-[\w-]+)\s*=\s*(["']).*?\1/gi, "")
-    .replace(/\s(?:style|class|id|data-[\w-]+)\s*=\s*[^\s>]+/gi, "")
-    .replace(/<a\b[^>]*href\s*=\s*(["'])(.*?)\1[^>]*>/gi, (_m, _q, href) => {
-      const safe = /^(https?:\/\/|\/)/i.test(href) ? href : "#";
-      return `<a href="${safe.replace(/"/g, "&quot;")}" target="_blank" rel="noreferrer">`;
-    })
+    .replace(/\son[a-z]+\s*=\s*(["']).*?\1/gi, "").replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, "")
+    .replace(/\s(?:style|class|id|data-[\w-]+)\s*=\s*(["']).*?\1/gi, "").replace(/\s(?:style|class|id|data-[\w-]+)\s*=\s*[^\s>]+/gi, "")
+    .replace(/<a\b[^>]*href\s*=\s*(["'])(.*?)\1[^>]*>/gi, (_m, _q, href) => `<a href="${(/^(https?:\/\/|\/)/i.test(href) ? href : "#").replace(/"/g, "&quot;")}" target="_blank" rel="noreferrer">`)
     .replace(/<(?!\/?(?:h[1-6]|p|br|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|strong|b|em|i|u|small|blockquote|a|div|span)\b)[^>]+>/gi, "")
     .replace(/<(th|td)\b([^>]*)>/gi, (_m, tag, attrs) => {
-      const colspan = attrs.match(/colspan\s*=\s*["']?(\d+)/i)?.[1];
-      const rowspan = attrs.match(/rowspan\s*=\s*["']?(\d+)/i)?.[1];
+      const colspan = attrs.match(/colspan\s*=\s*["']?(\d+)/i)?.[1]; const rowspan = attrs.match(/rowspan\s*=\s*["']?(\d+)/i)?.[1];
       return `<${tag}${colspan ? ` colspan="${colspan}"` : ""}${rowspan ? ` rowspan="${rowspan}"` : ""}>`;
-    })
-    .trim();
+    }).trim();
 }
-
 function extractElementSectionById(html: string, id: string, tagName = "h2") {
   const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const targetRe = new RegExp(`<${tagName}\\b[^>]*\\bid=["']${escapedId}["'][^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
-  const target = targetRe.exec(html);
-  if (!target || target.index === undefined) return null;
-  const start = target.index + target[0].length;
-  const nextHeadingRe = new RegExp(`<${tagName}\\b[^>]*>`, "ig");
-  nextHeadingRe.lastIndex = start;
-  const next = nextHeadingRe.exec(html);
-  return { heading: oneLine(target[1]), body: html.slice(start, next?.index ?? html.length) };
+  const target = targetRe.exec(html); if (!target || target.index === undefined) return null;
+  const start = target.index + target[0].length; const nextHeadingRe = new RegExp(`<${tagName}\\b[^>]*>`, "ig"); nextHeadingRe.lastIndex = start;
+  const next = nextHeadingRe.exec(html); return { heading: oneLine(target[1]), body: html.slice(start, next?.index ?? html.length) };
 }
-
 function sanitizeDmmZoneHtml(value: string) {
-  return sanitizeHtml(value)
-    .replace(/<a\b[^>]*>[\s\S]*?<img\b[^>]*>[\s\S]*?<\/a>/gi, "")
-    .replace(/<img\b[^>]*>/gi, "")
-    .replace(/<a\b[^>]*>\s*<\/a>/gi, "")
-    .replace(/<(?:p|div|span)>\s*<\/(?:p|div|span)>/gi, "")
-    .trim();
+  return sanitizeHtml(value).replace(/<a\b[^>]*>[\s\S]*?<img\b[^>]*>[\s\S]*?<\/a>/gi, "").replace(/<img\b[^>]*>/gi, "")
+    .replace(/<a\b[^>]*>\s*<\/a>/gi, "").replace(/<(?:p|div|span)>\s*<\/(?:p|div|span)>/gi, "").trim();
 }
-
 function extractLinks(html: string, baseUrl: string) {
-  const links: Array<{ href: string; label: string }> = [];
-  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const links: Array<{ href: string; label: string }> = []; const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(html))) {
-    const label = oneLine(match[2]);
-    if (!label) continue;
-    links.push({ href: absoluteUrl(match[1], baseUrl), label });
-  }
+  while ((match = re.exec(html))) { const label = oneLine(match[2]); if (label) links.push({ href: absoluteUrl(match[1], baseUrl), label }); }
   return links;
 }
-
-function findNanaStrategyLink(html: string, baseUrl: string) {
-  const links = extractLinks(html, baseUrl)
-    .map((link) => ({ ...link, normalizedLabel: normalize(link.label) }))
-    .filter((link) => {
-      // 機種ページ下部「攻略情報」にある期待値まとめ記事だけを候補にする。
-      // 設定判別・朝一・有利区間など、別の関連記事は除外する。
-      return /天井/.test(link.label)
-        && /期待値/.test(link.label)
-        && /恩恵/.test(link.label)
-        && /狙い目/.test(link.label)
-        && /(?:ヤメ時|やめ時)/.test(link.label)
-        && /まとめ/.test(link.label);
-    });
-
-  // 現在のスマホ版で表示される文言を最優先する。
-  const exactLabels = [
-    "天井の期待値や恩恵狙い目とヤメ時まとめ",
-    "天井の期待値や恩恵ヤメ時と狙い目まとめ",
-    "天井の期待値や恩恵狙い目とやめ時まとめ",
-  ];
-  const exact = links.find((link) => exactLabels.includes(link.normalizedLabel));
-  if (exact) return exact.href.split("#")[0];
-
-  // 表記揺れがあっても、必要な6語をすべて含むリンクを採用する。
+function findNanaExpectationLink(html: string, baseUrl: string) {
+  const links = extractLinks(html, baseUrl).filter((link) => {
+    const label = normalize(link.label);
+    return label.includes("天井") && label.includes("期待値") && label.includes("発動ゲーム数") && label.includes("恩恵");
+  });
   return links[0]?.href.split("#")[0] ?? null;
 }
-
 function extractTablesWithContext(html: string) {
-  const tables: Array<{ html: string; start: number; context: string }> = [];
-  const re = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html))) {
-    const start = match.index;
-    const context = oneLine(html.slice(Math.max(0, start - 1400), start));
-    tables.push({ html: match[0], start, context });
-  }
+  const tables: Array<{ html: string; context: string }> = []; const re = /<table\b[^>]*>[\s\S]*?<\/table>/gi; let match: RegExpExecArray | null;
+  while ((match = re.exec(html))) tables.push({ html: match[0], context: oneLine(html.slice(Math.max(0, match.index - 1800), match.index)) });
   return tables;
 }
-
 function parseExpectationRows(tableHtml: string): ExpectationRow[] {
-  const rows: ExpectationRow[] = [];
-  const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
-  let rowMatch: RegExpExecArray | null;
+  const rows: ExpectationRow[] = []; const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi; let rowMatch: RegExpExecArray | null;
   while ((rowMatch = rowRe.exec(tableHtml))) {
-    const cells: string[] = [];
-    const cellRe = /<(?:th|td)\b[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
-    let cellMatch: RegExpExecArray | null;
+    const cells: string[] = []; const cellRe = /<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/gi; let cellMatch: RegExpExecArray | null;
     while ((cellMatch = cellRe.exec(rowMatch[1]))) cells.push(oneLine(cellMatch[1]));
     if (cells.length < 2) continue;
-    const gameMatch = cells[0].replace(/,/g, "").match(/(\d{1,4})\s*G?/i);
-    if (!gameMatch) continue;
-    const games = Number(gameMatch[1]);
-    const nonEquivalentIndex = cells.findIndex((cell, index) => index > 0 && /5\.6枚|非等価/.test(cell));
-    const valueCells = cells.slice(1);
-    const nonEquivalent = nonEquivalentIndex > 0
-      ? cells[nonEquivalentIndex]
-      : valueCells[valueCells.length - 1];
-    if (!/[\-−+＋]?\s*[\d,]+\s*円/.test(nonEquivalent)) continue;
-    rows.push({
-      games,
-      equivalent: valueCells.length >= 2 ? valueCells[0] : undefined,
-      nonEquivalent,
-      label: cells[0],
-    });
+    const gameMatch = cells[0].replace(/,/g, "").match(/(\d{1,4})\s*G?/i); if (!gameMatch) continue;
+    const yenCells = cells.slice(1).filter((cell) => /[\-−+＋]?\s*[\d,]+\s*円/.test(cell)); if (!yenCells.length) continue;
+    rows.push({ games: Number(gameMatch[1]), equivalent: yenCells.length >= 2 ? yenCells[0] : undefined, nonEquivalent: yenCells.at(-1)!, label: cells[0] });
   }
-  return rows.filter((row, index, all) => all.findIndex((item) => item.games === row.games && item.nonEquivalent === row.nonEquivalent) === index);
+  return rows.filter((row, index, all) => all.findIndex((x) => x.games === row.games && x.nonEquivalent === row.nonEquivalent) === index);
 }
-
 function extractNanaExpectation(html: string) {
-  const tables = extractTablesWithContext(html);
-  const candidates = tables.filter((table) => {
+  const candidates = extractTablesWithContext(html).filter((table) => {
     const combined = `${table.context} ${oneLine(table.html)}`;
-    return /期待値/.test(combined) && (/非等価|5\.6枚交換|5\.6枚/.test(combined));
+    return /期待値/.test(combined) && /円/.test(combined) && (/非等価|5\.6枚交換|5\.6枚/.test(combined));
   });
   const table = candidates.sort((a, b) => {
-    const scoreA = /非等価の期待値一覧/.test(a.context) ? 20 : 0;
-    const scoreB = /非等価の期待値一覧/.test(b.context) ? 20 : 0;
-    return scoreB - scoreA;
+    const aa = /期待値の詳細|期待値一覧|非等価/.test(a.context) ? 20 : 0; const bb = /期待値の詳細|期待値一覧|非等価/.test(b.context) ? 20 : 0;
+    return bb - aa;
   })[0];
   if (!table) return null;
-
-  const headingMatch = table.context.match(/([^。\n]{0,40}(?:非等価|5\.6枚)[^。\n]{0,40}期待値[^。\n]{0,40})$/);
-  return {
-    heading: headingMatch?.[1]?.trim() || "非等価の期待値一覧",
-    contentHtml: sanitizeHtml(table.html),
-    rows: parseExpectationRows(table.html),
-  };
+  const rows = parseExpectationRows(table.html); if (!rows.length) return null;
+  return { heading: "非等価の期待値金額表", contentHtml: sanitizeHtml(table.html), rows };
 }
 
 async function getDmm(item: SearchItem): Promise<Result> {
-  const detailUrl = item.url.replace(/\/$/, "");
-  const html = await fetchHtml(detailUrl);
-  const block = extractElementSectionById(html, "anc-zone", "h2");
-  return {
-    ...item,
-    url: `${detailUrl}#anc-zone`,
-    heading: block?.heading || "天井・ゾーン・ヤメ時",
-    contentHtml: block ? sanitizeDmmZoneHtml(block.body) : "",
-  };
+  const detailUrl = item.url.replace(/\/$/, ""); const html = await fetchHtml(detailUrl); const block = extractElementSectionById(html, "anc-zone", "h2");
+  const pageTitle = oneLine(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
+  return { ...item, title: cleanMachineName(pageTitle) || cleanMachineName(item.title), url: `${detailUrl}#anc-zone`, heading: block?.heading || "天井・ゾーン・ヤメ時", contentHtml: block ? sanitizeDmmZoneHtml(block.body) : "" };
 }
-
 async function getHaienakun(item: SearchItem): Promise<Result> {
-  const html = await fetchHtml(item.url);
-  const pageTitle = oneLine(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
-  if (/ブログ会員限定記事|会員限定|有料記事/.test(pageTitle) || /_membership\/?$/i.test(item.url)) {
-    throw new Error("会員限定記事は対象外です。");
-  }
+  const html = await fetchHtml(item.url); const pageTitle = oneLine(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
+  if (/ブログ会員限定記事|会員限定|有料記事/.test(pageTitle) || /_membership\/?$/i.test(item.url)) throw new Error("ハイエナくん：会員限定記事は対象外です。");
   const block = extractHeadingBlock(html, /^まとめ$/i);
-  return { ...item, heading: block?.heading || "まとめ", contentHtml: block ? sanitizeHtml(block.body) : "" };
+  return { ...item, title: cleanMachineName(pageTitle) || cleanMachineName(item.title), heading: block?.heading || "まとめ", contentHtml: block ? sanitizeHtml(block.body) : "" };
 }
-
 async function getNana(item: SearchItem): Promise<Result> {
   const machineHtml = await fetchHtml(item.url);
-  const strategyUrl = findNanaStrategyLink(machineHtml, item.url);
-  if (!strategyUrl) throw new Error("『天井の期待値や恩恵・ヤメ時と狙い目まとめ』へのリンクを特定できませんでした。");
-  const strategyHtml = await fetchHtml(strategyUrl);
-  const expectation = extractNanaExpectation(strategyHtml);
-  if (!expectation) throw new Error("非等価の期待値一覧を抽出できませんでした。");
-  return {
-    source: "なな徹",
-    title: item.title,
-    url: strategyUrl,
-    heading: expectation.heading,
-    contentHtml: expectation.contentHtml,
-    expectationRows: expectation.rows,
-  };
+  const machineTitle = oneLine(machineHtml.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || machineHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || item.title);
+  const expectationUrl = findNanaExpectationLink(machineHtml, item.url);
+  if (!expectationUrl) throw new Error("なな徹：『天井の期待値や発動ゲーム数・恩恵』へのリンクを特定できませんでした。");
+  const detailHtml = await fetchHtml(expectationUrl); const expectation = extractNanaExpectation(detailHtml);
+  if (!expectation) throw new Error("なな徹：非等価の期待値金額表を抽出できませんでした。");
+  return { source: "なな徹", title: cleanMachineName(machineTitle) || cleanMachineName(item.title), url: expectationUrl, heading: expectation.heading, contentHtml: expectation.contentHtml, expectationRows: expectation.rows };
+}
+
+function chooseBest(items: SearchItem[], selected: string) {
+  return items.sort((a, b) => score(b.title, selected) - score(a.title, selected))[0] ?? null;
 }
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim() ?? "";
+  const selected = request.nextUrl.searchParams.get("selected")?.trim() ?? "";
   if (query.length < 2) return NextResponse.json({ message: "機種名を2文字以上入力してください。" }, { status: 400 });
 
-  const errors: string[] = [];
-  const found = await Promise.allSettled([findDmm(query), findHaienakun(query), findNana(query)]);
-  const tasks: Promise<Result>[] = [];
+  const searched = await Promise.allSettled([findDmmCandidates(selected || query), findHaienakunCandidates(selected || query), findNanaCandidates(selected || query)]);
+  const dmmCandidates = searched[0].status === "fulfilled" ? searched[0].value : [];
+  const haienaCandidates = searched[1].status === "fulfilled" ? searched[1].value : [];
+  const nanaCandidates = searched[2].status === "fulfilled" ? searched[2].value : [];
 
-  const dmm = found[0].status === "fulfilled" ? found[0].value : null;
-  const haienakun = found[1].status === "fulfilled" ? found[1].value : null;
-  const nana = found[2].status === "fulfilled" ? found[2].value : null;
-
-  if (dmm) tasks.push(getDmm(dmm)); else errors.push("DMMぱちタウン：該当機種を特定できませんでした。");
-  if (haienakun) tasks.push(getHaienakun(haienakun)); else errors.push("ハイエナくん：対象となる通常記事を特定できませんでした。");
-  if (nana) tasks.push(getNana(nana)); else errors.push("なな徹：該当機種を特定できませんでした。");
-
-  const settled = await Promise.allSettled(tasks);
-  const results: Result[] = [];
-  for (const result of settled) {
-    if (result.status === "fulfilled") results.push(result.value);
-    else errors.push(result.reason instanceof Error ? result.reason.message : "記事取得に失敗しました。");
+  if (!selected) {
+    const candidateNames = buildCandidateNames([dmmCandidates, haienaCandidates, nanaCandidates], query);
+    if (candidateNames.length > 1) return NextResponse.json({ query, candidates: candidateNames, results: [], errors: [], fetchedAt: new Date().toISOString() });
+    if (candidateNames.length === 1) {
+      const url = new URL(request.url); url.searchParams.set("selected", candidateNames[0]);
+      return GET(new NextRequest(url));
+    }
   }
 
-  return NextResponse.json({ query, results, errors, fetchedAt: new Date().toISOString() });
+  const machineName = selected || query; const errors: string[] = []; const tasks: Promise<Result>[] = [];
+  const dmm = chooseBest(dmmCandidates, machineName); const haiena = chooseBest(haienaCandidates, machineName); const nana = chooseBest(nanaCandidates, machineName);
+  if (dmm) tasks.push(getDmm(dmm)); else errors.push("DMMぱちタウン：該当機種を特定できませんでした。");
+  if (haiena) tasks.push(getHaienakun(haiena)); else errors.push("ハイエナくん：対象となる通常記事を特定できませんでした。");
+  if (nana) tasks.push(getNana(nana)); else errors.push("なな徹：該当機種を特定できませんでした。");
+
+  const settled = await Promise.allSettled(tasks); const results: Result[] = [];
+  for (const result of settled) result.status === "fulfilled" ? results.push(result.value) : errors.push(result.reason instanceof Error ? result.reason.message : "記事取得に失敗しました。");
+  return NextResponse.json({ query, selectedMachine: machineName, candidates: [], results, errors, fetchedAt: new Date().toISOString() });
 }

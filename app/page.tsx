@@ -14,7 +14,7 @@ type SourceResult = {
   contentHtml?: string;
   expectationRows?: ExpectationRow[];
 };
-type ApiResponse = { query: string; results: SourceResult[]; errors: string[]; fetchedAt: string };
+type ApiResponse = { query: string; selectedMachine?: string; candidates?: string[]; results: SourceResult[]; errors: string[]; fetchedAt: string };
 type StoredMachine = { name: string; searchedAt: string };
 
 const RECENT_KEY = "slot-reference-recent-v1";
@@ -42,6 +42,7 @@ export default function Home() {
   const [currentGames, setCurrentGames] = useState("");
   const [recent, setRecent] = useState<StoredMachine[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [candidates, setCandidates] = useState<string[]>([]);
 
   useEffect(() => {
     setRecent(readStorage<StoredMachine[]>(RECENT_KEY, []));
@@ -60,15 +61,18 @@ export default function Home() {
     setRecent(next); localStorage.setItem(RECENT_KEY, JSON.stringify(next));
   }
 
-  async function runSearch(value: string) {
+  async function runSearch(value: string, selectedMachine?: string) {
     const trimmed = value.trim();
     if (trimmed.length < 2) { setError("機種名を2文字以上入力してください。"); return; }
-    setQuery(trimmed); setLoading(true); setError(""); setData(null); setCurrentGames("");
+    setQuery(trimmed); setLoading(true); setError(""); setData(null); setCandidates([]); setCurrentGames("");
     try {
-      const response = await fetch(`/api/reference?q=${encodeURIComponent(trimmed)}`, { cache: "no-store" });
+      const params = new URLSearchParams({ q: trimmed });
+      if (selectedMachine) params.set("selected", selectedMachine);
+      const response = await fetch(`/api/reference?${params.toString()}`, { cache: "no-store" });
       const json = await response.json() as ApiResponse & { message?: string };
       if (!response.ok) throw new Error(json.message || json.errors?.[0] || "検索に失敗しました。");
-      setData(json); rememberSearch(trimmed);
+      if (json.candidates && json.candidates.length > 1) { setCandidates(json.candidates); return; }
+      setData(json); rememberSearch(json.selectedMachine || trimmed);
     } catch (e) { setError(e instanceof Error ? e.message : "検索に失敗しました。"); }
     finally { setLoading(false); }
   }
@@ -120,9 +124,15 @@ export default function Home() {
 
       {error && <div className="notice error-notice"><TriangleAlert size={19} />{error}</div>}
 
+      {candidates.length > 1 && <section className="candidate-panel">
+        <p className="result-kicker">候補を選択</p>
+        <h2>どの機種を参照しますか？</h2>
+        <div className="candidate-list">{candidates.map((name) => <button key={name} type="button" onClick={() => runSearch(query, name)}>{name}</button>)}</div>
+      </section>}
+
       {data && <>
         <section className="result-toolbar">
-          <div><p className="result-kicker">検索結果</p><div className="result-title-row"><h2>{data.query}</h2><button className={`favorite-button ${favorites.includes(data.query) ? "active" : ""}`} type="button" onClick={() => toggleFavorite(data.query)}><Heart size={18} fill={favorites.includes(data.query) ? "currentColor" : "none"} /></button></div></div>
+          <div><p className="result-kicker">検索結果</p><div className="result-title-row"><h2>{data.selectedMachine || data.query}</h2><button className={`favorite-button ${favorites.includes(data.selectedMachine || data.query) ? "active" : ""}`} type="button" onClick={() => toggleFavorite(data.selectedMachine || data.query)}><Heart size={18} fill={favorites.includes(data.selectedMachine || data.query) ? "currentColor" : "none"} /></button></div></div>
           <label className="games-input-card"><span><Clock3 size={16} /> 現在G数</span><div><input inputMode="numeric" pattern="[0-9]*" value={currentGames} onChange={(event) => setCurrentGames(event.target.value.replace(/\D/g, ""))} placeholder="例 482" /><b>G</b></div></label>
         </section>
 
@@ -137,7 +147,7 @@ export default function Home() {
           {sources.map((source) => {
             const result = data.results.find((item) => item.source === source);
             return <article className={`result-section ${sourceClass(source)}`} key={source}>
-              <header className="result-section-header"><div><span className="source-pill">{source}</span><h3>{result ? `${data.query}｜${source}` : `${source}｜該当記事なし`}</h3></div>{result && <a href={result.url} target="_blank" rel="noreferrer">元記事 <ExternalLink size={14} /></a>}</header>
+              <header className="result-section-header"><div><span className="source-pill">{source}</span><h3>{result ? `${result.title}｜${source}` : `${source}｜該当記事なし`}</h3></div>{result && <a href={result.url} target="_blank" rel="noreferrer">元記事 <ExternalLink size={14} /></a>}</header>
               <div className="result-section-body">
                 {result ? <><h4>{result.heading}</h4>{result.contentHtml ? <div className="original-format" dangerouslySetInnerHTML={{ __html: result.contentHtml }} /> : result.lines?.length ? <div className="extract-lines">{result.lines.map((line, index) => <p key={`${source}-${index}`}>{line}</p>)}</div> : <p className="empty-message">本文を抽出できませんでした。</p>}</> : <p className="empty-message">入力した機種名に一致する記事を特定できませんでした。</p>}
               </div>

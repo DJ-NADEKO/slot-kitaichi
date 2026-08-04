@@ -191,3 +191,10 @@ button { -webkit-tap-highlight-color: transparent; }
   .original-format { font-size: 12px; }
   .original-format table { display: block; overflow-x: auto; white-space: nowrap; }
 }
+
+/* v1.3: 複数候補の選択 */
+.candidate-panel { margin: 16px 0; padding: 20px; border-radius: 22px; background: rgba(255,255,255,.95); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.candidate-panel h2 { margin: 4px 0 14px; font-size: 21px; }
+.candidate-list { display: grid; gap: 9px; }
+.candidate-list button { width: 100%; text-align: left; border: 1px solid #efdfe7; background: #fff8fb; color: var(--text); border-radius: 14px; padding: 13px 14px; font-weight: 900; cursor: pointer; }
+.candidate-list button:hover { border-color: #ec9fba; background: #fff1f6; }
