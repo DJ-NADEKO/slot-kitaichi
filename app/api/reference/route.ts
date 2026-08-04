@@ -190,10 +190,30 @@ function extractLinks(html: string, baseUrl: string) {
 }
 
 function findNanaStrategyLink(html: string, baseUrl: string) {
-  const links = extractLinks(html, baseUrl);
-  const exact = links.find((link) => /天井の期待値や恩恵.*ヤメ時.*狙い目まとめ/.test(link.label));
-  if (exact) return exact.href;
-  return links.find((link) => /天井.*期待値|ヤメ時.*狙い目|天井.*狙い目/.test(link.label))?.href ?? null;
+  const links = extractLinks(html, baseUrl)
+    .map((link) => ({ ...link, normalizedLabel: normalize(link.label) }))
+    .filter((link) => {
+      // 機種ページ下部「攻略情報」にある期待値まとめ記事だけを候補にする。
+      // 設定判別・朝一・有利区間など、別の関連記事は除外する。
+      return /天井/.test(link.label)
+        && /期待値/.test(link.label)
+        && /恩恵/.test(link.label)
+        && /狙い目/.test(link.label)
+        && /(?:ヤメ時|やめ時)/.test(link.label)
+        && /まとめ/.test(link.label);
+    });
+
+  // 現在のスマホ版で表示される文言を最優先する。
+  const exactLabels = [
+    "天井の期待値や恩恵狙い目とヤメ時まとめ",
+    "天井の期待値や恩恵ヤメ時と狙い目まとめ",
+    "天井の期待値や恩恵狙い目とやめ時まとめ",
+  ];
+  const exact = links.find((link) => exactLabels.includes(link.normalizedLabel));
+  if (exact) return exact.href.split("#")[0];
+
+  // 表記揺れがあっても、必要な6語をすべて含むリンクを採用する。
+  return links[0]?.href.split("#")[0] ?? null;
 }
 
 function extractTablesWithContext(html: string) {
