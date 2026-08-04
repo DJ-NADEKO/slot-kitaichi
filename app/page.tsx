@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { ExternalLink, Search, TriangleAlert } from "lucide-react";
+import { ExternalLink, LogOut, Search, TriangleAlert } from "lucide-react";
 
 type SourceResult = {
   source: "DMMぱちタウン" | "ハイエナくん";
@@ -49,9 +49,17 @@ export default function Home() {
 
   const sources: SourceResult["source"][] = ["DMMぱちタウン", "ハイエナくん"];
 
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
   return (
     <main className="reference-shell">
       <header className="reference-hero">
+        <button className="logout-button" type="button" onClick={logout}>
+          <LogOut size={15} /> ログアウト
+        </button>
         <p className="eyebrow">PRIVATE SLOT REFERENCE</p>
         <h1>機種情報クイック参照</h1>
         <p>機種名を検索し、2サイトの指定箇所だけを都度取得して表示します。データは保存しません。</p>
@@ -96,7 +104,7 @@ export default function Home() {
                   <div className="source-card-head">
                     <div>
                       <span className="source-badge">{source}</span>
-                      <h2>{result?.title || "該当記事なし"}</h2>
+                      <h2>{result ? `${data.query}｜${source}` : "該当記事なし"}</h2>
                     </div>
                     {result && (
                       <a className="open-link" href={result.url} target="_blank" rel="noreferrer">
